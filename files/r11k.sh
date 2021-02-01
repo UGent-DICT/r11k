@@ -210,7 +210,16 @@ function do_submodules() {
 			return 1
 		fi
 
-		git submodule update --reference "${lmirror}" "${mod}"
+		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" )"
+		if [ -n "${follow_branch}" ]
+		then
+			echo "${FONT_RED}Module '${mod}' has branch '${follow_branch}' configured. Check updates${FONT_NORMAL}" 
+			remote_option='--remote'
+		else
+			remote_option=''
+		fi
+
+		git submodule update ${remote_option} --reference "${lmirror}" "${mod}"
 		## TODO: Recursive checkout.
 		#
 		# 	cd "${mod}"
@@ -218,6 +227,25 @@ function do_submodules() {
 		#)
 	done
 }
+
+function do_submodules_with_tracking_branch() {
+	local url lmirror mod
+	git submodule | awk '{print $2}' | while read mod; do
+		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" )"
+		if [ -n "${follow_branch}" ]
+		then
+			echo "${FONT_RED}Module '${mod}' has branch '${follow_branch}' configured. Check updates${FONT_NORMAL}" 
+			url="$( git config --get "submodule.${mod}.url" )"
+			lmirror="$( git_mirror "${url}" )"
+			if [ $? -ne 0 ]; then
+				return 1
+			fi
+
+			git submodule update --remote --reference "${lmirror}" "${mod}"
+		fi
+	done
+}
+
 function translate_branch_to_env() {
 	if [ -n "${PRODUCTION_BRANCH}" -a "${1}" == "${PRODUCTION_BRANCH}" ]
 	then
@@ -254,6 +282,7 @@ function do_submodules_for_branch() {
 	if [[ -z "$(git status --porcelain -uno)" ]] && [[ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/${branch}")" ]] && [[ ${new_branch} == 'false' ]]
 	then
 		echo "${FONT_GREEN}Branch has no changes. ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
+		do_submodules_with_tracking_branch
 	else
 		echo "${FONT_GREEN}Branch is new or has changes! Updating. ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
 		git fetch origin "$branch"
