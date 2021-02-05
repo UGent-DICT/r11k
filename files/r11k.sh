@@ -232,6 +232,7 @@ function do_submodules_with_tracking_branch() {
 	local url lmirror mod
 	git submodule | awk '{print $2}' | while read mod; do
 		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" )"
+		repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
 		if [ -n "${follow_branch}" ]
 		then
 			echo "${FONT_RED}Module '${mod}' has branch '${follow_branch}' configured. Check updates${FONT_NORMAL}" 
@@ -241,7 +242,11 @@ function do_submodules_with_tracking_branch() {
 				return 1
 			fi
 
-			git submodule update --remote --reference "${lmirror}" "${mod}"
+			(
+				cd ${repo_path}
+				git checkout ${follow_branch}
+				git pull
+			)
 		fi
 	done
 }
