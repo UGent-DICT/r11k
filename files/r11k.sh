@@ -140,23 +140,30 @@ function escape_repo {
 
 function git_mirror {
 	local repo="$1"
-	local erepo="$( escape_repo "$repo" )"
-	if [ ! -d "$CACHEDIR/$erepo" ]; then
-		if ! git clone --mirror "$repo" "$CACHEDIR/$erepo"; then
+	local erepo="$( escape_repo "${repo}" )"
+	if [ ! -d "${CACHEDIR}/${erepo}" ]; then
+		echo "START Cloning '${repo}' into '${CACHEDIR}/${erepo}'" >&3
+		if ! git clone --mirror "${repo}" "${CACHEDIR}/${erepo}"; then
+			echo "Git clone failed!!!" >&3
 			return 1
 		fi
+		echo "DONE Cloning '${repo}' into '${CACHEDIR}/${erepo}'" >&3
 	fi
 	echo "$CACHEDIR/$erepo"
 	touch "$SCRATCH/refreshed"
 	if ! grep -q "$erepo" "$SCRATCH/refreshed"; then
-		echo "Updating $repo" >&3
+		echo "START Updating ${repo} into '${CACHEDIR}/${erepo}'" >&3
 		(
-			cd "$CACHEDIR/$erepo"
+			cd "${CACHEDIR}/${erepo}"
 			if ! git remote update --prune >/dev/null; then
+				echo "Git update failed!!!" >&3
 				return 1
 			fi
 		)
 		echo "$erepo" >> "$SCRATCH/refreshed"
+		echo "DONE Updating ${repo} into '${CACHEDIR}/${erepo}'" >&3
+	else
+		echo "Repo ${repo} already updated during this r11k run." >&3
 	fi
 }
 
@@ -213,42 +220,62 @@ function do_submodules() {
 		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" )"
 		if [ -n "${follow_branch}" ]
 		then
-			echo "${FONT_RED}Module '${mod}' has branch '${follow_branch}' configured. Check updates${FONT_NORMAL}" 
-			remote_option='--remote'
+			handle_submodule_with_tracking_branch ${mod} ${follow_branch}
 		else
-			remote_option=''
+			git submodule update --reference "${lmirror}" "${mod}"
 		fi
-
-		git submodule update ${remote_option} --reference "${lmirror}" "${mod}"
-		## TODO: Recursive checkout.
-		#
-		# 	cd "${mod}"
-		#	do_submodules # recurse down
-		#)
 	done
 }
 
 function do_submodules_with_tracking_branch() {
-	local url lmirror mod
+	local follow_branch mod
 	git submodule | awk '{print $2}' | while read mod; do
-		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" )"
-		repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
+		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" || echo '')"
 		if [ -n "${follow_branch}" ]
 		then
-			echo "${FONT_RED}Module '${mod}' has branch '${follow_branch}' configured. Check updates${FONT_NORMAL}" 
-			url="$( git config --get "submodule.${mod}.url" )"
-			lmirror="$( git_mirror "${url}" )"
-			if [ $? -ne 0 ]; then
-				return 1
-			fi
-
-			(
-				cd ${repo_path}
-				git checkout ${follow_branch}
-				git pull
-			)
+			handle_submodule_with_tracking_branch ${mod} ${follow_branch}
 		fi
 	done
+}
+
+function handle_submodule_with_tracking_branch() {
+	local url lmirror mod follow_branch repo_path
+	mod=$1
+	follow_branch=$2
+
+	echo "${FONT_RED}Module '${mod}' has branch '${follow_branch}' configured. Check updates${FONT_NORMAL}"
+	repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
+	url="$( git config --get "submodule.${mod}.url" )"
+	echo "Using url: ${url}"
+	lmirror="$( git_mirror "${url}" )"
+	ret=$?
+	if [ $ret -ne 0 ]; then
+		echo "return code from 'git_mirror ${url}' was $ret !"
+		return 1
+	fi
+
+	if [ -d "${repo_path}/.git" ]
+	then
+		echo "${repo_path} is a git repo. Updating."
+		(
+			cd ${repo_path}
+			git fetch
+			git checkout ${follow_branch}
+			commit=$(git rev-parse HEAD)
+			echo "Now at git commit ${commit}"
+		)
+	else
+		echo "${repo_path} is NOT a git repo. Recreating."
+		rm -rf ${repo_path}
+		git clone -b ${follow_branch} ${lmirror} ${repo_path}
+		(
+			cd ${repo_path}
+			commit=$(git rev-parse HEAD)
+			echo "Now at git commit ${commit}"
+		)
+	fi
+	echo "ready with module: ${mod}"
+
 }
 
 function translate_branch_to_env() {
@@ -350,9 +377,15 @@ if [ ${#BRANCHES} -eq 0 ]; then
 	exit 66;
 fi;
 
+echo "Branches to 'manage'"
+echo '--------------------'
+echo "${BRANCHES[@]}"
+echo '--------------------'
+
 # Map branches to environments
 PREV_COUNTER="${CHANGE_COUNTER}"
 while read branch; do
+	echo "Start managing branch: ${branch}"
 	do_submodules_for_branch "$branch"
 	if [ $PREV_COUNTER -ne $CHANGE_COUNTER ]; then
 		echo "${FONT_GREEN}Running environment hooks ${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
@@ -360,6 +393,7 @@ while read branch; do
 		clear_puppet_cache "$( translate_branch_to_env "${branch}" )"
 		PREV_COUNTER="${CHANGE_COUNTER}"
 	fi
+	echo "Done managing branch: ${branch}"
 done <<<"${BRANCHES[@]}"
 
 # Cleanup old environments
