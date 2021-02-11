@@ -261,6 +261,8 @@ function handle_submodule_with_tracking_branch() {
 			cd ${repo_path}
 			git fetch
 			git checkout ${follow_branch}
+			git reset --hard HEAD
+			git pull
 			commit=$(git rev-parse HEAD)
 			echo "Now at git commit ${commit}"
 		)
