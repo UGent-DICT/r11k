@@ -150,8 +150,13 @@ function git_mirror {
 		echo "DONE Cloning '${repo}' into '${CACHEDIR}/${erepo}'" >&3
 	fi
 	echo "$CACHEDIR/$erepo"
+}
+
+function update_mirror {
+	local repo="$1"
+	local erepo="$( escape_repo "$repo" )"
 	touch "$SCRATCH/refreshed"
-	if ! grep -q "$erepo" "$SCRATCH/refreshed"; then
+	if ! grep -qx "$erepo" "$SCRATCH/refreshed"; then
 		echo "START Updating ${repo} into '${CACHEDIR}/${erepo}'" >&3
 		(
 			cd "${CACHEDIR}/${erepo}"
@@ -190,6 +195,7 @@ ensure_directory "$CACHEDIR"
 CACHEDIR="$( cd "$CACHEDIR"; pwd )" # make absolute path
 
 MASTER_GIT_DIR="$( git_mirror "$REPO" )"
+update_mirror "$REPO"
 
 if [ -t 1 ]; then
 	FONT_GREEN="$(echo -e "\x1b[32m")"
@@ -205,79 +211,88 @@ fi
 
 function do_submodules() {
 	local branch="$1"
-	local url lmirror mod
+	local url lmirror mod pin
 	git submodule init
 	git submodule sync >/dev/null
 	git submodule | awk '{print $2}' | while read mod; do
 		echo "${FONT_GREEN}Checking out submodule ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}${FONT_GREEN}/${mod}${FONT_NORMAL}"
 
 		url="$( git config --get "submodule.${mod}.url" )"
+		pin="$( git rev-parse "HEAD:${mod}" 2>/dev/null || true )"
 		lmirror="$( git_mirror "${url}" )"
 		if [ $? -ne 0 ]; then
 			return 1
 		fi
 
-		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" )"
-		if [ -n "${follow_branch}" ]
-		then
-			handle_submodule_with_tracking_branch ${mod} ${follow_branch}
+		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" || echo '' )"
+		if [ -n "${follow_branch}" ]; then
+			# Branch-tracking submodule; always refresh mirror
+			if ! update_mirror "${url}"; then
+				return 1
+			fi
+			handle_submodule_with_tracking_branch "${mod}" "${follow_branch}" "${lmirror}"
 		else
+			# Only refresh the submodule mirror if the pinned commit isn't
+			# already present locally.
+			if [ -z "$pin" ] || ! GIT_DIR="$lmirror" git cat-file -e "$pin" 2>/dev/null; then
+				if ! update_mirror "${url}"; then
+					return 1
+				fi
+			fi
 			git submodule update --reference "${lmirror}" "${mod}"
 		fi
 	done
 }
 
 function do_submodules_with_tracking_branch() {
-	local follow_branch mod
+	local follow_branch mod url lmirror
 	git submodule | awk '{print $2}' | while read mod; do
-		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" || echo '')"
-		if [ -n "${follow_branch}" ]
-		then
-			handle_submodule_with_tracking_branch ${mod} ${follow_branch}
+		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" || echo '' )"
+		if [ -n "${follow_branch}" ]; then
+			url="$( git config --get "submodule.${mod}.url" )"
+			if ! lmirror="$( git_mirror "${url}" )"; then
+				return 1
+			fi
+			# Branch-tracking: always refresh so we see the latest tip.
+			if ! update_mirror "${url}"; then
+				return 1
+			fi
+			handle_submodule_with_tracking_branch "${mod}" "${follow_branch}" "${lmirror}"
 		fi
 	done
 }
 
 function handle_submodule_with_tracking_branch() {
-	local url lmirror mod follow_branch repo_path
-	mod=$1
-	follow_branch=$2
+	local mod="$1"
+	local follow_branch="$2"
+	local lmirror="$3"
+	local repo_path commit
 
 	echo "${FONT_RED}Module '${mod}' has branch '${follow_branch}' configured. Check updates${FONT_NORMAL}"
 	repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
-	url="$( git config --get "submodule.${mod}.url" )"
-	echo "Using url: ${url}"
-	lmirror="$( git_mirror "${url}" )"
-	ret=$?
-	if [ $ret -ne 0 ]; then
-		echo "return code from 'git_mirror ${url}' was $ret !"
-		return 1
-	fi
 
-	if [ -d "${repo_path}/.git" ]
-	then
+	if [ -d "${repo_path}/.git" ]; then
 		echo "${repo_path} is a git repo. Updating."
 		(
-			cd ${repo_path}
+			cd "${repo_path}"
 			git fetch
-			git checkout ${follow_branch}
+			git checkout "${follow_branch}"
 			git reset --hard HEAD
 			git pull
-			commit=$(git rev-parse HEAD)
+			commit="$( git rev-parse HEAD )"
 			echo "Now at git commit ${commit}"
 		)
 	else
 		echo "${repo_path} is NOT a git repo. Recreating."
-		rm -rf ${repo_path}
-		git clone -b ${follow_branch} ${lmirror} ${repo_path}
+		rm -rf "${repo_path}"
+		git clone -b "${follow_branch}" "${lmirror}" "${repo_path}"
 		(
-			cd ${repo_path}
-			commit=$(git rev-parse HEAD)
+			cd "${repo_path}"
+			commit="$( git rev-parse HEAD )"
 			echo "Now at git commit ${commit}"
 		)
 	fi
 	echo "ready with module: ${mod}"
-
 }
 
 function translate_branch_to_env() {
