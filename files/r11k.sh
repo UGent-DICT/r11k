@@ -210,102 +210,99 @@ else
 fi
 
 function do_submodules() {
-	local branch="$1"
-	local url lmirror mod pin
+	local url lmirror mod pin follow_branch
 	git submodule init
 	git submodule sync >/dev/null
 	git submodule | awk '{print $2}' | while read mod; do
-		echo "${FONT_GREEN}Checking out submodule ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}${FONT_GREEN}/${mod}${FONT_NORMAL}"
+		echo "${FONT_GREEN}Checking submodule ${FONT_NORMAL}${FONT_GREEN_BOLD}${mod}${FONT_NORMAL}"
 
 		url="$( git config --get "submodule.${mod}.url" )"
 		pin="$( git rev-parse "HEAD:${mod}" 2>/dev/null || true )"
-		lmirror="$( git_mirror "${url}" )"
-		if [ $? -ne 0 ]; then
+		if ! lmirror="$( git_mirror "${url}" )"; then
 			return 1
 		fi
 
 		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" || echo '' )"
 		if [ -n "${follow_branch}" ]; then
-			# Branch-tracking submodule; always refresh mirror
-			if ! update_mirror "${url}"; then
-				return 1
-			fi
-			handle_submodule_with_tracking_branch "${mod}" "${follow_branch}" "${lmirror}"
-		else
-			# Only refresh the submodule mirror if the pinned commit isn't
-			# already present locally.
-			if [ -z "$pin" ] || ! GIT_DIR="$lmirror" git cat-file -e "$pin" 2>/dev/null; then
-				if ! update_mirror "${url}"; then
-					return 1
-				fi
-			fi
-			# Shallow at depth 1; --reference keeps objects accessible
-			# via alternate so arbitrary pinned SHAs still resolve even
-			# though they're outside the shallow boundary.
-			git submodule update --reference "${lmirror}" --depth=1 "${mod}"
-		fi
-	done
-}
-
-function do_submodules_with_tracking_branch() {
-	local follow_branch mod url lmirror
-	git submodule | awk '{print $2}' | while read mod; do
-		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" || echo '' )"
-		if [ -n "${follow_branch}" ]; then
-			url="$( git config --get "submodule.${mod}.url" )"
-			if ! lmirror="$( git_mirror "${url}" )"; then
-				return 1
-			fi
 			# Branch-tracking: always refresh so we see the latest tip.
 			if ! update_mirror "${url}"; then
 				return 1
 			fi
-			handle_submodule_with_tracking_branch "${mod}" "${follow_branch}" "${lmirror}"
+			ensure_submodule_tracking "${mod}" "${follow_branch}" "${lmirror}"
+		else
+			# Pinned: only refresh the mirror if the pin isn't already local.
+			if [ -z "${pin}" ] || ! GIT_DIR="${lmirror}" git cat-file -e "${pin}" 2>/dev/null; then
+				if ! update_mirror "${url}"; then
+					return 1
+				fi
+			fi
+			ensure_submodule_pinned "${mod}" "${pin}" "${lmirror}"
 		fi
 	done
 }
 
-function handle_submodule_with_tracking_branch() {
+# Idempotent reset of a pinned submodule. Returns early when the working
+# tree already matches the pin and is clean (no tracked modifications, no
+# untracked files); otherwise forcibly converges to the pin and wipes the
+# working tree.
+function ensure_submodule_pinned() {
+	local mod="$1"
+	local pin="$2"
+	local lmirror="$3"
+	local repo_path submod_head submod_dirty
+
+	repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
+
+	if [ -d "${repo_path}/.git" ] && [ -n "${pin}" ]; then
+		submod_head="$( GIT_DIR="${repo_path}/.git" git rev-parse HEAD )"
+		submod_dirty="$( cd "${repo_path}" && git status --porcelain )"
+		if [[ "${submod_head}" = "${pin}" ]] && [[ -z "${submod_dirty}" ]]; then
+			echo "Submodule ${mod} already at ${pin} and clean."
+			return 0
+		fi
+	fi
+
+	# First-time setup, wrong SHA, or dirty: forcibly converge.
+	# --reference keeps arbitrary pinned SHAs reachable through the alternate
+	# even though they sit outside the shallow boundary.
+	git submodule update --reference "${lmirror}" --depth=1 --force "${mod}"
+	( cd "${repo_path}" && git clean -ffdx )
+}
+
+# Idempotent reset of a branch-tracking submodule. Same shape as the
+# pinned variant: skip when already at branch tip and clean, otherwise
+# fetch + reset --hard + clean.
+function ensure_submodule_tracking() {
 	local mod="$1"
 	local follow_branch="$2"
 	local lmirror="$3"
-	local repo_path commit mirror_tip submod_head
+	local repo_path mirror_tip submod_head submod_dirty
 
-	echo "${FONT_RED}Module '${mod}' has branch '${follow_branch}' configured. Check updates${FONT_NORMAL}"
+	echo "${FONT_RED}Module '${mod}' tracks branch '${follow_branch}'${FONT_NORMAL}"
 	repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
+	mirror_tip="$( GIT_DIR="${lmirror}" git rev-parse "refs/heads/${follow_branch}" )"
 
 	if [ -d "${repo_path}/.git" ]; then
-		# Compare the mirror's tip against the submodule's HEAD before fetching.
-		# The mirror was already refreshed by the caller.
-		mirror_tip="$( GIT_DIR="${lmirror}" git rev-parse "refs/heads/${follow_branch}" )"
 		submod_head="$( GIT_DIR="${repo_path}/.git" git rev-parse HEAD )"
-		if [[ "${mirror_tip}" = "${submod_head}" ]]; then
-			echo "${repo_path} already at ${follow_branch} tip ${submod_head}; skipping fetch."
-			echo "ready with module: ${mod}"
+		submod_dirty="$( cd "${repo_path}" && git status --porcelain )"
+		if [[ "${submod_head}" = "${mirror_tip}" ]] && [[ -z "${submod_dirty}" ]]; then
+			echo "${repo_path} already at ${follow_branch} tip ${submod_head} and clean."
 			return 0
 		fi
-		echo "${repo_path} is a git repo. Updating."
+		echo "Resetting ${repo_path} to ${follow_branch} tip ${mirror_tip}."
 		(
 			cd "${repo_path}"
-			# Repoint origin to file:// so shallow fetches stay shallow,
-			# in case the existing clone predates this convention.
 			git remote set-url origin "file://${lmirror}"
 			git fetch --depth=1 origin "${follow_branch}"
 			git reset --hard "origin/${follow_branch}"
-			commit="$( git rev-parse HEAD )"
-			echo "Now at git commit ${commit}"
+			git clean -ffdx
 		)
 	else
-		echo "${repo_path} is NOT a git repo. Recreating."
+		echo "${repo_path} missing or not a git repo. Recreating."
 		rm -rf "${repo_path}"
-		git clone --depth=1 --single-branch -b "${follow_branch}" "file://${lmirror}" "${repo_path}"
-		(
-			cd "${repo_path}"
-			commit="$( git rev-parse HEAD )"
-			echo "Now at git commit ${commit}"
-		)
+		git clone --depth=1 --single-branch -b "${follow_branch}" \
+			"file://${lmirror}" "${repo_path}"
 	fi
-	echo "ready with module: ${mod}"
 }
 
 function translate_branch_to_env() {
@@ -321,7 +318,7 @@ function do_submodules_for_branch() {
 	local branch="$1"
 	local branch_envname="$(translate_branch_to_env "$branch")"
 	local new_branch='false'
-	local mirror_tip env_head
+	local mirror_tip env_head env_dirty
 	echo "$branch_envname" >> "$SCRATCH/branches"
 	echo "${FONT_GREEN_BOLD}Checking out branch ${branch} into ${branch_envname}${FONT_NORMAL}"
 
@@ -343,14 +340,16 @@ function do_submodules_for_branch() {
 		new_branch='true'
 	fi
 	cd "${BASEDIR}/${branch_envname}"
-	# The mirror was refreshed at script start, so its branch tip is the authoritative target.
-	# Compare against env HEAD before fetching. If they match, skip the round-trip entirely.
+	# The mirror was refreshed at script start, so its branch tip is the
+	# authoritative target. Compare against env HEAD before fetching; if
+	# they match and the working tree is fully clean (tracked modifications
+	# *and* untracked files), skip the parent reset.
 	mirror_tip="$( GIT_DIR="${MASTER_GIT_DIR}" git rev-parse "refs/heads/${branch}" )"
 	env_head="$( git rev-parse HEAD )"
-	if [[ "${env_head}" = "${mirror_tip}" ]] && [[ "${new_branch}" == 'false' ]] && [[ -z "$(git status --porcelain -uno)" ]]
+	env_dirty="$( git status --porcelain )"
+	if [[ "${env_head}" = "${mirror_tip}" ]] && [[ "${new_branch}" == 'false' ]] && [[ -z "${env_dirty}" ]]
 	then
 		echo "${FONT_GREEN}Branch has no changes. ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
-		do_submodules_with_tracking_branch
 	else
 		echo "${FONT_GREEN}Branch is new or has changes! Updating. ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
 		git remote set-url origin "file://${MASTER_GIT_DIR}"
@@ -360,12 +359,16 @@ function do_submodules_for_branch() {
 		fi
 		git reset --hard "origin/$branch"
 		git clean -ffdx --exclude='/.resource_types/' # .resource_types is used by puppet to provide environment isolation (puppet generate types)
-		if ! do_submodules $branch; then
-			echo "${FONT_RED}Could not check out branch ${branch}, removing...${FONT_NORMAL}"
-			cd "${BASEDIR}"
-			rm -rf "${branch_envname}"
-		fi
 		let CHANGE_COUNTER+=1
+	fi
+
+	# Walk submodules every run, regardless of the parent-branch outcome above.
+	# A tracking submodule's upstream may have been manually moved, and a pinned submodule's working tree may have been edited locally.
+	# Both need to converge back to a clean, correct checkout.
+	if ! do_submodules; then
+		echo "${FONT_RED}Could not update submodules for ${branch}, removing...${FONT_NORMAL}"
+		cd "${BASEDIR}"
+		rm -rf "${branch_envname}"
 	fi
 }
 
