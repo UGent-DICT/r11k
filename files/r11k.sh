@@ -239,7 +239,10 @@ function do_submodules() {
 					return 1
 				fi
 			fi
-			git submodule update --reference "${lmirror}" "${mod}"
+			# Shallow at depth 1; --reference keeps objects accessible
+			# via alternate so arbitrary pinned SHAs still resolve even
+			# though they're outside the shallow boundary.
+			git submodule update --reference "${lmirror}" --depth=1 "${mod}"
 		fi
 	done
 }
@@ -275,17 +278,18 @@ function handle_submodule_with_tracking_branch() {
 		echo "${repo_path} is a git repo. Updating."
 		(
 			cd "${repo_path}"
-			git fetch
-			git checkout "${follow_branch}"
-			git reset --hard HEAD
-			git pull
+			# Repoint origin to file:// so shallow fetches stay shallow,
+			# in case the existing clone predates this convention.
+			git remote set-url origin "file://${lmirror}"
+			git fetch --depth=1 origin "${follow_branch}"
+			git reset --hard "origin/${follow_branch}"
 			commit="$( git rev-parse HEAD )"
 			echo "Now at git commit ${commit}"
 		)
 	else
 		echo "${repo_path} is NOT a git repo. Recreating."
 		rm -rf "${repo_path}"
-		git clone -b "${follow_branch}" "${lmirror}" "${repo_path}"
+		git clone --depth=1 --single-branch -b "${follow_branch}" "file://${lmirror}" "${repo_path}"
 		(
 			cd "${repo_path}"
 			commit="$( git rev-parse HEAD )"
@@ -320,21 +324,25 @@ function do_submodules_for_branch() {
 		rm -rf "$BASEDIR/$branch_envname"
 	fi
 	if [ ! -e "$BASEDIR/$branch_envname" ]; then
-		git clone --reference "$MASTER_GIT_DIR" --shared \
-			-b "$branch" "$MASTER_GIT_DIR" "$BASEDIR/$branch_envname"
+		# Shallow, single-branch checkout: the env only ever needs the tip
+		# of its own branch. file:// is required for git to honour --depth
+		# against a local source (a plain path falls back to hardlinks).
+		git clone --depth=1 --single-branch -b "$branch" \
+			"file://${MASTER_GIT_DIR}" "$BASEDIR/$branch_envname"
 		let CHANGE_COUNTER+=1
 		new_branch='true'
 	fi
 	cd "${BASEDIR}/${branch_envname}"
-	git remote set-url origin "${MASTER_GIT_DIR}"
-	git remote update --prune
+	git remote set-url origin "file://${MASTER_GIT_DIR}"
+	# Mirror was already refreshed at script start; fetch only the ref we
+	# need, and keep the env shallow at depth 1.
+	git fetch --depth=1 origin "$branch"
 	if [[ -z "$(git status --porcelain -uno)" ]] && [[ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/${branch}")" ]] && [[ ${new_branch} == 'false' ]]
 	then
 		echo "${FONT_GREEN}Branch has no changes. ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
 		do_submodules_with_tracking_branch
 	else
 		echo "${FONT_GREEN}Branch is new or has changes! Updating. ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
-		git fetch origin "$branch"
 		git reset --hard "origin/$branch"
 		git clean -ffdx --exclude='/.resource_types/' # .resource_types is used by puppet to provide environment isolation (puppet generate types)
 		if ! do_submodules $branch; then
