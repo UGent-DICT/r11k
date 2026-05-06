@@ -269,12 +269,21 @@ function handle_submodule_with_tracking_branch() {
 	local mod="$1"
 	local follow_branch="$2"
 	local lmirror="$3"
-	local repo_path commit
+	local repo_path commit mirror_tip submod_head
 
 	echo "${FONT_RED}Module '${mod}' has branch '${follow_branch}' configured. Check updates${FONT_NORMAL}"
 	repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
 
 	if [ -d "${repo_path}/.git" ]; then
+		# Compare the mirror's tip against the submodule's HEAD before fetching.
+		# The mirror was already refreshed by the caller.
+		mirror_tip="$( GIT_DIR="${lmirror}" git rev-parse "refs/heads/${follow_branch}" )"
+		submod_head="$( GIT_DIR="${repo_path}/.git" git rev-parse HEAD )"
+		if [[ "${mirror_tip}" = "${submod_head}" ]]; then
+			echo "${repo_path} already at ${follow_branch} tip ${submod_head}; skipping fetch."
+			echo "ready with module: ${mod}"
+			return 0
+		fi
 		echo "${repo_path} is a git repo. Updating."
 		(
 			cd "${repo_path}"
@@ -312,6 +321,7 @@ function do_submodules_for_branch() {
 	local branch="$1"
 	local branch_envname="$(translate_branch_to_env "$branch")"
 	local new_branch='false'
+	local mirror_tip env_head
 	echo "$branch_envname" >> "$SCRATCH/branches"
 	echo "${FONT_GREEN_BOLD}Checking out branch ${branch} into ${branch_envname}${FONT_NORMAL}"
 
@@ -333,16 +343,21 @@ function do_submodules_for_branch() {
 		new_branch='true'
 	fi
 	cd "${BASEDIR}/${branch_envname}"
-	git remote set-url origin "file://${MASTER_GIT_DIR}"
-	# Mirror was already refreshed at script start; fetch only the ref we
-	# need, and keep the env shallow at depth 1.
-	git fetch --depth=1 origin "$branch"
-	if [[ -z "$(git status --porcelain -uno)" ]] && [[ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/${branch}")" ]] && [[ ${new_branch} == 'false' ]]
+	# The mirror was refreshed at script start, so its branch tip is the authoritative target.
+	# Compare against env HEAD before fetching. If they match, skip the round-trip entirely.
+	mirror_tip="$( GIT_DIR="${MASTER_GIT_DIR}" git rev-parse "refs/heads/${branch}" )"
+	env_head="$( git rev-parse HEAD )"
+	if [[ "${env_head}" = "${mirror_tip}" ]] && [[ "${new_branch}" == 'false' ]] && [[ -z "$(git status --porcelain -uno)" ]]
 	then
 		echo "${FONT_GREEN}Branch has no changes. ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
 		do_submodules_with_tracking_branch
 	else
 		echo "${FONT_GREEN}Branch is new or has changes! Updating. ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
+		git remote set-url origin "file://${MASTER_GIT_DIR}"
+		# Fresh clones already have origin/<branch> at the tip we want
+		if [[ "${new_branch}" != 'true' ]]; then
+			git fetch --depth=1 origin "$branch"
+		fi
 		git reset --hard "origin/$branch"
 		git clean -ffdx --exclude='/.resource_types/' # .resource_types is used by puppet to provide environment isolation (puppet generate types)
 		if ! do_submodules $branch; then
