@@ -253,8 +253,8 @@ function ensure_submodule_pinned() {
 
 	repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
 
-	if [ -d "${repo_path}/.git" ] && [ -n "${pin}" ]; then
-		submod_head="$( GIT_DIR="${repo_path}/.git" git rev-parse HEAD )"
+	if [ -e "${repo_path}/.git" ] && [ -n "${pin}" ]; then
+		submod_head="$( cd "${repo_path}" && git rev-parse HEAD )"
 		submod_dirty="$( cd "${repo_path}" && git status --porcelain )"
 		if [[ "${submod_head}" = "${pin}" ]] && [[ -z "${submod_dirty}" ]]; then
 			echo "Submodule ${mod} already at ${pin} and clean."
@@ -282,8 +282,8 @@ function ensure_submodule_tracking() {
 	repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
 	mirror_tip="$( GIT_DIR="${lmirror}" git rev-parse "refs/heads/${follow_branch}" )"
 
-	if [ -d "${repo_path}/.git" ]; then
-		submod_head="$( GIT_DIR="${repo_path}/.git" git rev-parse HEAD )"
+	if [ -e "${repo_path}/.git" ]; then
+		submod_head="$( cd "${repo_path}" && git rev-parse HEAD )"
 		submod_dirty="$( cd "${repo_path}" && git status --porcelain )"
 		if [[ "${submod_head}" = "${mirror_tip}" ]] && [[ -z "${submod_dirty}" ]]; then
 			echo "${repo_path} already at ${follow_branch} tip ${submod_head} and clean."
