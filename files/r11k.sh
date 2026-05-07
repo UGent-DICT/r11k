@@ -209,14 +209,19 @@ else
 	FONT_NORMAL=""
 fi
 
+function list_submodule_paths() {
+	# Read paths straight from .gitmodules; avoids `git submodule status`,
+	# which walks every submodule's .git just to enumerate them.
+	[ -f .gitmodules ] || return 0
+	git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}'
+}
+
 function do_submodules() {
 	local url lmirror mod pin follow_branch
-	git submodule init
-	git submodule sync >/dev/null
-	git submodule | awk '{print $2}' | while read mod; do
+	for mod in $(list_submodule_paths); do
 		echo "${FONT_GREEN}Checking submodule ${FONT_NORMAL}${FONT_GREEN_BOLD}${mod}${FONT_NORMAL}"
 
-		url="$( git config --get "submodule.${mod}.url" )"
+		url="$( git config -f .gitmodules --get "submodule.${mod}.url" )"
 		pin="$( git rev-parse "HEAD:${mod}" 2>/dev/null || true )"
 		if ! lmirror="$( git_mirror "${url}" )"; then
 			return 1
@@ -263,9 +268,9 @@ function ensure_submodule_pinned() {
 	fi
 
 	# First-time setup, wrong SHA, or dirty: forcibly converge.
-	# --reference keeps the new clone backed by the mirror as an alternate,
-	# so any pinned SHA is reachable without copying objects locally.
-	git submodule update --reference "${lmirror}" --force "${mod}"
+	# sync picks up any URL change in .gitmodules; --init handles new entries.
+	git submodule sync "${mod}" >/dev/null
+	git submodule update --init --reference "${lmirror}" --force "${mod}"
 	( cd "${repo_path}" && git clean -ffdx )
 }
 
