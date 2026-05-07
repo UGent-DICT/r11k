@@ -263,9 +263,9 @@ function ensure_submodule_pinned() {
 	fi
 
 	# First-time setup, wrong SHA, or dirty: forcibly converge.
-	# --reference keeps arbitrary pinned SHAs reachable through the alternate
-	# even though they sit outside the shallow boundary.
-	git submodule update --reference "${lmirror}" --depth=1 --force "${mod}"
+	# --reference keeps arbitrary pinned SHAs reachable through the alternate.
+	# No --depth: git < 1.8.4 rejects it on `submodule update`.
+	git submodule update --reference "${lmirror}" --force "${mod}"
 	( cd "${repo_path}" && git clean -ffdx )
 }
 
@@ -293,7 +293,9 @@ function ensure_submodule_tracking() {
 		(
 			cd "${repo_path}"
 			git remote set-url origin "file://${lmirror}"
-			git fetch --depth=1 origin "${follow_branch}"
+			# Explicit refspec: git < 1.8.4 only updates FETCH_HEAD when
+			# fetching by name, leaving refs/remotes/origin/<branch> stale.
+			git fetch --depth=1 origin "+refs/heads/${follow_branch}:refs/remotes/origin/${follow_branch}"
 			git reset --hard "origin/${follow_branch}"
 			git clean -ffdx
 		)
@@ -355,7 +357,9 @@ function do_submodules_for_branch() {
 		git remote set-url origin "file://${MASTER_GIT_DIR}"
 		# Fresh clones already have origin/<branch> at the tip we want
 		if [[ "${new_branch}" != 'true' ]]; then
-			git fetch --depth=1 origin "$branch"
+			# Explicit refspec: git < 1.8.4 only updates FETCH_HEAD when
+			# fetching by name, leaving refs/remotes/origin/<branch> stale.
+			git fetch --depth=1 origin "+refs/heads/$branch:refs/remotes/origin/$branch"
 		fi
 		git reset --hard "origin/$branch"
 		git clean -ffdx --exclude='/.resource_types/' # .resource_types is used by puppet to provide environment isolation (puppet generate types)
