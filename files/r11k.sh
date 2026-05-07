@@ -263,8 +263,8 @@ function ensure_submodule_pinned() {
 	fi
 
 	# First-time setup, wrong SHA, or dirty: forcibly converge.
-	# --reference keeps arbitrary pinned SHAs reachable through the alternate.
-	# No --depth: git < 1.8.4 rejects it on `submodule update`.
+	# --reference keeps the new clone backed by the mirror as an alternate,
+	# so any pinned SHA is reachable without copying objects locally.
 	git submodule update --reference "${lmirror}" --force "${mod}"
 	( cd "${repo_path}" && git clean -ffdx )
 }
@@ -295,15 +295,15 @@ function ensure_submodule_tracking() {
 			git remote set-url origin "file://${lmirror}"
 			# Explicit refspec: git < 1.8.4 only updates FETCH_HEAD when
 			# fetching by name, leaving refs/remotes/origin/<branch> stale.
-			git fetch --depth=1 origin "+refs/heads/${follow_branch}:refs/remotes/origin/${follow_branch}"
+			git fetch origin "+refs/heads/${follow_branch}:refs/remotes/origin/${follow_branch}"
 			git reset --hard "origin/${follow_branch}"
 			git clean -ffdx
 		)
 	else
 		echo "${repo_path} missing or not a git repo. Recreating."
 		rm -rf "${repo_path}"
-		git clone --depth=1 --single-branch -b "${follow_branch}" \
-			"file://${lmirror}" "${repo_path}"
+		git clone --single-branch -b "${follow_branch}" \
+			--reference "${lmirror}" "file://${lmirror}" "${repo_path}"
 	fi
 }
 
@@ -333,10 +333,10 @@ function do_submodules_for_branch() {
 		rm -rf "$BASEDIR/$branch_envname"
 	fi
 	if [ ! -e "$BASEDIR/$branch_envname" ]; then
-		# Shallow, single-branch checkout: the env only ever needs the tip
-		# of its own branch. file:// is required for git to honour --depth
-		# against a local source (a plain path falls back to hardlinks).
-		git clone --depth=1 --single-branch -b "$branch" \
+		# Single-branch checkout backed by the mirror as an alternate, so
+		# the env carries near-zero new objects on disk.
+		git clone --single-branch -b "$branch" \
+			--reference "${MASTER_GIT_DIR}" \
 			"file://${MASTER_GIT_DIR}" "$BASEDIR/$branch_envname"
 		let CHANGE_COUNTER+=1
 		new_branch='true'
@@ -359,7 +359,7 @@ function do_submodules_for_branch() {
 		if [[ "${new_branch}" != 'true' ]]; then
 			# Explicit refspec: git < 1.8.4 only updates FETCH_HEAD when
 			# fetching by name, leaving refs/remotes/origin/<branch> stale.
-			git fetch --depth=1 origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+			git fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch"
 		fi
 		git reset --hard "origin/$branch"
 		git clean -ffdx --exclude='/.resource_types/' # .resource_types is used by puppet to provide environment isolation (puppet generate types)
