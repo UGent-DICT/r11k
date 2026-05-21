@@ -391,6 +391,8 @@ function collect_branches() {
 			GIT_DIR="$MASTER_GIT_DIR" git show-ref --heads | sed 's%.\{40\} refs/heads/%%' | \
 				{ grep -e "^${include}\$" || true; } >> "$tmpfilter"
 		done
+		GIT_DIR="$MASTER_GIT_DIR" git show-ref --heads | sed 's%.\{40\} refs/heads/%%' | \
+			{ grep -e "^${PRODUCTION_BRANCH}\$" || true; } >> "$tmpfilter"
 		cat "${tmpfilter}" | sort -u
 	fi
 }
