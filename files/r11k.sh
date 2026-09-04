@@ -381,9 +381,16 @@ function do_submodules_for_branch() {
 	# A tracking submodule's upstream may have been manually moved, and a pinned submodule's working tree may have been edited locally.
 	# Both need to converge back to a clean, correct checkout.
 	if ! do_submodules; then
-		echo "${FONT_RED}Could not update submodules for ${branch}, removing...${FONT_NORMAL}"
-		cd "${BASEDIR}"
-		rm -rf "${branch_envname}"
+		# Only discard what we just created; an existing environment is still
+		# serving and must survive a transient remote failure.
+		if [[ "${new_branch}" == 'true' ]]; then
+			echo "${FONT_RED}Could not set up submodules for ${branch}, removing...${FONT_NORMAL}"
+			cd "${BASEDIR}"
+			rm -rf "${branch_envname}"
+		else
+			echo "${FONT_RED}Could not update submodules for ${branch}, leaving environment as-is.${FONT_NORMAL}"
+		fi
+		return 1
 	fi
 }
 
@@ -444,9 +451,16 @@ echo '--------------------'
 
 # Map branches to environments
 PREV_COUNTER="${CHANGE_COUNTER}"
+FAILED_BRANCHES=0
 while read branch; do
 	echo "Start managing branch: ${branch}"
-	do_submodules_for_branch "$branch"
+	if ! do_submodules_for_branch "$branch"; then
+		let FAILED_BRANCHES+=1
+		# Resync, or this branch's changes would fire the next branch's hooks
+		PREV_COUNTER="${CHANGE_COUNTER}"
+		echo "Done managing branch: ${branch}"
+		continue
+	fi
 	if [ $PREV_COUNTER -ne $CHANGE_COUNTER ]; then
 		echo "${FONT_GREEN}Running environment hooks ${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
 		run_hooks "${ENVHOOKSDIR}" "$branch" "$( translate_branch_to_env "${branch}" )"
@@ -474,6 +488,11 @@ if [ -d $HOOKSDIR ]; then
 	fi
 else
 	echo "WARNING: HOOKSDIR ${HOOKSDIR} not found"
+fi
+
+if [ ${FAILED_BRANCHES} -gt 0 ]; then
+	echo "${FONT_RED}${FAILED_BRANCHES} branch(es) failed to deploy${FONT_NORMAL}" >&2
+	exit 70 # EX_SOFTWARE
 fi
 
 # vim: set ts=4 sw=2 tw=0 noet :
