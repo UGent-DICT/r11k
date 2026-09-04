@@ -72,7 +72,7 @@ else
 fi
 
 ## git version check
-MIN_GIT_VERSION="2.9"
+MIN_GIT_VERSION="2.13"
 GIT_VERSION="$( git --version | awk '{print $3}' )"
 if ! printf '%s\n%s\n' "${MIN_GIT_VERSION}" "${GIT_VERSION}" | sort -V -C; then
   echo "r11k requires git >= ${MIN_GIT_VERSION}, you have ${GIT_VERSION}"
@@ -443,18 +443,18 @@ function do_submodules_for_branch() {
 }
 
 function collect_branches() {
-	local includes
+	local branches
 	local tmpfilter="${SCRATCH}/filter_branches.txt"
+	branches="$( GIT_DIR="$MASTER_GIT_DIR" git for-each-ref \
+		--format='%(refname:lstrip=2)' refs/heads/ )"
 	if [ ${#INCLUDES} -eq 0 ]; then
-		GIT_DIR="$MASTER_GIT_DIR" git show-ref --heads | sed 's%.\{40\} refs/heads/%%'
+		echo "${branches}"
 	else
 		for include in "${INCLUDES[@]}"; do
-			GIT_DIR="$MASTER_GIT_DIR" git show-ref --heads | sed 's%.\{40\} refs/heads/%%' | \
-				{ grep -e "^${include}\$" || true; } >> "$tmpfilter"
+			{ grep -e "^${include}\$" <<<"${branches}" || true; } >> "$tmpfilter"
 		done
-		GIT_DIR="$MASTER_GIT_DIR" git show-ref --heads | sed 's%.\{40\} refs/heads/%%' | \
-			{ grep -e "^${PRODUCTION_BRANCH}\$" || true; } >> "$tmpfilter"
-		cat "${tmpfilter}" | sort -u
+		{ grep -e "^${PRODUCTION_BRANCH}\$" <<<"${branches}" || true; } >> "$tmpfilter"
+		sort -u "${tmpfilter}"
 	fi
 }
 
