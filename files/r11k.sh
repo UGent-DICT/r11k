@@ -217,31 +217,35 @@ else
 	FONT_NORMAL=""
 fi
 
-function list_submodule_paths() {
-	# Read paths straight from .gitmodules; avoids `git submodule status`,
+function list_submodule_names() {
+	# Read names straight from .gitmodules; avoids `git submodule status`,
 	# which walks every submodule's .git just to enumerate them.
 	[ -f .gitmodules ] || return 0
-	git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}'
+	git config -f .gitmodules --name-only --get-regexp '^submodule\..*\.path$' \
+		| sed 's/^submodule\.//;s/\.path$//'
 }
 
 function do_submodules() {
-	local url lmirror mod pin follow_branch
-	for mod in $(list_submodule_paths); do
-		echo "${FONT_GREEN}Checking submodule ${FONT_NORMAL}${FONT_GREEN_BOLD}${mod}${FONT_NORMAL}"
+	# A submodule's name keys the config sections, its path locates the
+	# gitlink; `git mv` moves the path and leaves the name alone.
+	local url lmirror name repo_path pin follow_branch
+	for name in $(list_submodule_names); do
+		repo_path="$( git config -f .gitmodules --get "submodule.${name}.path" )"
+		echo "${FONT_GREEN}Checking submodule ${FONT_NORMAL}${FONT_GREEN_BOLD}${repo_path}${FONT_NORMAL}"
 
-		url="$( git config -f .gitmodules --get "submodule.${mod}.url" )"
-		pin="$( git rev-parse "HEAD:${mod}" 2>/dev/null || true )"
+		url="$( git config -f .gitmodules --get "submodule.${name}.url" )"
+		pin="$( git rev-parse "HEAD:${repo_path}" 2>/dev/null || true )"
 		if ! lmirror="$( git_mirror "${url}" )"; then
 			return 1
 		fi
 
-		follow_branch="$( git config -f .gitmodules --get "submodule.${mod}.branch" || echo '' )"
+		follow_branch="$( git config -f .gitmodules --get "submodule.${name}.branch" || echo '' )"
 		if [ -n "${follow_branch}" ]; then
 			# Branch-tracking: always refresh so we see the latest tip.
 			if ! update_mirror "${url}"; then
 				return 1
 			fi
-			ensure_submodule_tracking "${mod}" "${follow_branch}" "${lmirror}"
+			ensure_submodule_tracking "${repo_path}" "${follow_branch}" "${lmirror}"
 		else
 			# Pinned: only refresh the mirror if the pin isn't already local.
 			if [ -z "${pin}" ] || ! GIT_DIR="${lmirror}" git cat-file -e "${pin}" 2>/dev/null; then
@@ -249,7 +253,7 @@ function do_submodules() {
 					return 1
 				fi
 			fi
-			ensure_submodule_pinned "${mod}" "${pin}" "${lmirror}"
+			ensure_submodule_pinned "${repo_path}" "${pin}" "${lmirror}"
 		fi
 	done
 }
@@ -259,26 +263,24 @@ function do_submodules() {
 # untracked files); otherwise forcibly converges to the pin and wipes the
 # working tree.
 function ensure_submodule_pinned() {
-	local mod="$1"
+	local repo_path="$1"
 	local pin="$2"
 	local lmirror="$3"
-	local repo_path submod_head submod_dirty
-
-	repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
+	local submod_head submod_dirty
 
 	if [ -e "${repo_path}/.git" ] && [ -n "${pin}" ]; then
 		submod_head="$( cd "${repo_path}" && git rev-parse HEAD )"
 		submod_dirty="$( cd "${repo_path}" && git status --porcelain )"
 		if [[ "${submod_head}" = "${pin}" ]] && [[ -z "${submod_dirty}" ]]; then
-			echo "Submodule ${mod} already at ${pin} and clean."
+			echo "Submodule ${repo_path} already at ${pin} and clean."
 			return 0
 		fi
 	fi
 
 	# First-time setup, wrong SHA, or dirty: forcibly converge.
 	# sync picks up any URL change in .gitmodules; --init handles new entries.
-	git submodule sync "${mod}" >/dev/null
-	git submodule update --init --reference "${lmirror}" --force "${mod}"
+	git submodule sync "${repo_path}" >/dev/null
+	git submodule update --init --reference "${lmirror}" --force "${repo_path}"
 	( cd "${repo_path}" && git clean -ffdx )
 }
 
@@ -286,13 +288,12 @@ function ensure_submodule_pinned() {
 # pinned variant: skip when already at branch tip and clean, otherwise
 # fetch + reset --hard + clean.
 function ensure_submodule_tracking() {
-	local mod="$1"
+	local repo_path="$1"
 	local follow_branch="$2"
 	local lmirror="$3"
-	local repo_path mirror_tip submod_head submod_dirty
+	local mirror_tip submod_head submod_dirty
 
-	echo "${FONT_RED}Module '${mod}' tracks branch '${follow_branch}'${FONT_NORMAL}"
-	repo_path="$( git config -f .gitmodules --get "submodule.${mod}.path" )"
+	echo "${FONT_RED}Module '${repo_path}' tracks branch '${follow_branch}'${FONT_NORMAL}"
 	mirror_tip="$( GIT_DIR="${lmirror}" git rev-parse "refs/heads/${follow_branch}" )"
 
 	if [ -e "${repo_path}/.git" ]; then
