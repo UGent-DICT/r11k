@@ -71,6 +71,14 @@ else
   exit 69 # EX_UNABAILABLE
 fi
 
+## git version check
+MIN_GIT_VERSION="2.9"
+GIT_VERSION="$( git --version | awk '{print $3}' )"
+if ! printf '%s\n%s\n' "${MIN_GIT_VERSION}" "${GIT_VERSION}" | sort -V -C; then
+  echo "r11k requires git >= ${MIN_GIT_VERSION}, you have ${GIT_VERSION}"
+  exit 69 # EX_UNAVAILABLE
+fi
+
 ## No options = show help + exit EX_USAGE
 if GETOPT_TEMP="$( getopt --shell bash --name "$0" \
 	-o b:c:k:e:p:f:i:hw \
@@ -298,8 +306,7 @@ function ensure_submodule_tracking() {
 		(
 			cd "${repo_path}"
 			git remote set-url origin "file://${lmirror}"
-			# Explicit refspec: git < 1.8.4 only updates FETCH_HEAD when
-			# fetching by name, leaving refs/remotes/origin/<branch> stale.
+			# Explicit refspec keeps the fetch narrow and deterministic.
 			git fetch origin "+refs/heads/${follow_branch}:refs/remotes/origin/${follow_branch}"
 			git reset --hard "origin/${follow_branch}"
 			git clean -ffdx
@@ -362,8 +369,7 @@ function do_submodules_for_branch() {
 		git remote set-url origin "file://${MASTER_GIT_DIR}"
 		# Fresh clones already have origin/<branch> at the tip we want
 		if [[ "${new_branch}" != 'true' ]]; then
-			# Explicit refspec: git < 1.8.4 only updates FETCH_HEAD when
-			# fetching by name, leaving refs/remotes/origin/<branch> stale.
+			# Explicit refspec keeps the fetch narrow and deterministic.
 			git fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch"
 		fi
 		git reset --hard "origin/$branch"
