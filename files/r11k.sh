@@ -146,15 +146,59 @@ function escape_repo {
 	echo -n "$1" | perl -pe 's@([^a-zA-Z0-9-])@sprintf "_%02x", ord($1)@ge;'
 }
 
+# A remote that failed once this run is treated as down for the rest of it;
+# retrying it per branch just hammers something that may be rate limiting us.
+function remote_failed {
+	touch "${SCRATCH}/failed"
+	if grep -qx "$1" "${SCRATCH}/failed"; then
+		echo "Skipping ${1}, it already failed during this r11k run." >&3
+		return 0
+	fi
+	return 1
+}
+
+function with_retry {
+	local max=3
+	local attempt=1
+	local delay=5
+	while true; do
+		if "$@"; then
+			return 0
+		fi
+		if [ "${attempt}" -ge "${max}" ]; then
+			return 1
+		fi
+		echo "Attempt ${attempt}/${max} failed, retrying in ${delay}s" >&3
+		sleep "${delay}"
+		attempt=$(( attempt + 1 ))
+		delay=$(( delay * 3 ))
+	done
+}
+
 function git_mirror {
 	local repo="$1"
 	local erepo="$( escape_repo "${repo}" )"
+	local tmpdir
+	if remote_failed "${erepo}"; then
+		return 1
+	fi
 	if [ ! -d "${CACHEDIR}/${erepo}" ]; then
 		echo "START Cloning '${repo}' into '${CACHEDIR}/${erepo}'" >&3
-		if ! git clone --mirror "${repo}" "${CACHEDIR}/${erepo}"; then
+		# Clone aside and move into place; an interrupted clone would otherwise
+		# leave a partial mirror that later runs accept as valid.
+		tmpdir="$( mktemp -d "${CACHEDIR}/.r11k-tmp.XXXXXX" )"
+		if ! with_retry git clone --mirror "${repo}" "${tmpdir}/mirror"; then
+			rm -rf "${tmpdir}"
+			echo "${erepo}" >> "${SCRATCH}/failed"
 			echo "Git clone failed!!!" >&3
 			return 1
 		fi
+		if ! mv "${tmpdir}/mirror" "${CACHEDIR}/${erepo}"; then
+			rm -rf "${tmpdir}"
+			echo "Could not move mirror into place!!!" >&3
+			return 1
+		fi
+		rmdir "${tmpdir}"
 		echo "DONE Cloning '${repo}' into '${CACHEDIR}/${erepo}'" >&3
 	fi
 	echo "$CACHEDIR/$erepo"
@@ -163,10 +207,14 @@ function git_mirror {
 function update_mirror {
 	local repo="$1"
 	local erepo="$( escape_repo "$repo" )"
+	if remote_failed "${erepo}"; then
+		return 1
+	fi
 	touch "$SCRATCH/refreshed"
 	if ! grep -qx "$erepo" "$SCRATCH/refreshed"; then
 		echo "START Updating ${repo} into '${CACHEDIR}/${erepo}'" >&3
-		if ! git -C "${CACHEDIR}/${erepo}" remote update --prune >/dev/null; then
+		if ! with_retry git -C "${CACHEDIR}/${erepo}" remote update --prune >/dev/null; then
+			echo "${erepo}" >> "${SCRATCH}/failed"
 			echo "Git update failed!!!" >&3
 			return 1
 		fi
