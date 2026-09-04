@@ -253,19 +253,17 @@ function do_submodules() {
 					return 1
 				fi
 			fi
-			ensure_submodule_pinned "${repo_path}" "${pin}" "${lmirror}"
+			ensure_submodule_pinned "${name}" "${repo_path}" "${pin}" "${lmirror}"
 		fi
 	done
 }
 
-# Idempotent reset of a pinned submodule. Returns early when the working
-# tree already matches the pin and is clean (no tracked modifications, no
-# untracked files); otherwise forcibly converges to the pin and wipes the
-# working tree.
+# Converges a pinned submodule to its gitlink SHA, sourced from the local mirror.
 function ensure_submodule_pinned() {
-	local repo_path="$1"
-	local pin="$2"
-	local lmirror="$3"
+	local name="$1"
+	local repo_path="$2"
+	local pin="$3"
+	local lmirror="$4"
 	local submod_head submod_dirty
 
 	if [ -e "${repo_path}/.git" ] && [ -n "${pin}" ]; then
@@ -277,10 +275,12 @@ function ensure_submodule_pinned() {
 		fi
 	fi
 
-	# First-time setup, wrong SHA, or dirty: forcibly converge.
-	# sync picks up any URL change in .gitmodules; --init handles new entries.
-	git submodule sync "${repo_path}" >/dev/null
-	git submodule update --init --reference "${lmirror}" --force "${repo_path}"
+	# No `git submodule sync`: it would reset the url back to the upstream one.
+	git submodule init -- "${repo_path}" >/dev/null
+	git config "submodule.${name}.url" "file://${lmirror}"
+	# protocol.file.allow defaults to `user`, which blocks file:// for submodules.
+	git -c protocol.file.allow=always submodule update \
+		--reference "${lmirror}" --force -- "${repo_path}"
 	( cd "${repo_path}" && git clean -ffdx )
 }
 
