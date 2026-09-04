@@ -166,13 +166,10 @@ function update_mirror {
 	touch "$SCRATCH/refreshed"
 	if ! grep -qx "$erepo" "$SCRATCH/refreshed"; then
 		echo "START Updating ${repo} into '${CACHEDIR}/${erepo}'" >&3
-		(
-			cd "${CACHEDIR}/${erepo}"
-			if ! git remote update --prune >/dev/null; then
-				echo "Git update failed!!!" >&3
-				return 1
-			fi
-		)
+		if ! git -C "${CACHEDIR}/${erepo}" remote update --prune >/dev/null; then
+			echo "Git update failed!!!" >&3
+			return 1
+		fi
 		echo "$erepo" >> "$SCRATCH/refreshed"
 		echo "DONE Updating ${repo} into '${CACHEDIR}/${erepo}'" >&3
 	else
@@ -245,7 +242,9 @@ function do_submodules() {
 			if ! update_mirror "${url}"; then
 				return 1
 			fi
-			ensure_submodule_tracking "${repo_path}" "${follow_branch}" "${lmirror}"
+			if ! ensure_submodule_tracking "${repo_path}" "${follow_branch}" "${lmirror}"; then
+				return 1
+			fi
 		else
 			# Pinned: only refresh the mirror if the pin isn't already local.
 			if [ -z "${pin}" ] || ! GIT_DIR="${lmirror}" git cat-file -e "${pin}" 2>/dev/null; then
@@ -253,7 +252,9 @@ function do_submodules() {
 					return 1
 				fi
 			fi
-			ensure_submodule_pinned "${name}" "${repo_path}" "${pin}" "${lmirror}"
+			if ! ensure_submodule_pinned "${name}" "${repo_path}" "${pin}" "${lmirror}"; then
+				return 1
+			fi
 		fi
 	done
 }
@@ -276,17 +277,15 @@ function ensure_submodule_pinned() {
 	fi
 
 	# No `git submodule sync`: it would reset the url back to the upstream one.
-	git submodule init -- "${repo_path}" >/dev/null
-	git config "submodule.${name}.url" "file://${lmirror}"
+	git submodule init -- "${repo_path}" >/dev/null || return 1
+	git config "submodule.${name}.url" "file://${lmirror}" || return 1
 	# protocol.file.allow defaults to `user`, which blocks file:// for submodules.
 	git -c protocol.file.allow=always submodule update \
-		--reference "${lmirror}" --force -- "${repo_path}"
-	( cd "${repo_path}" && git clean -ffdx )
+		--reference "${lmirror}" --force -- "${repo_path}" || return 1
+	( cd "${repo_path}" && git clean -ffdx ) || return 1
 }
 
-# Idempotent reset of a branch-tracking submodule. Same shape as the
-# pinned variant: skip when already at branch tip and clean, otherwise
-# fetch + reset --hard + clean.
+# Converges a branch-tracking submodule to the mirror's branch tip, ignoring the gitlink.
 function ensure_submodule_tracking() {
 	local repo_path="$1"
 	local follow_branch="$2"
@@ -294,7 +293,7 @@ function ensure_submodule_tracking() {
 	local mirror_tip submod_head submod_dirty
 
 	echo "${FONT_RED}Module '${repo_path}' tracks branch '${follow_branch}'${FONT_NORMAL}"
-	mirror_tip="$( GIT_DIR="${lmirror}" git rev-parse "refs/heads/${follow_branch}" )"
+	mirror_tip="$( GIT_DIR="${lmirror}" git rev-parse "refs/heads/${follow_branch}" )" || return 1
 
 	if [ -e "${repo_path}/.git" ]; then
 		submod_head="$( cd "${repo_path}" && git rev-parse HEAD )"
@@ -304,19 +303,19 @@ function ensure_submodule_tracking() {
 			return 0
 		fi
 		echo "Resetting ${repo_path} to ${follow_branch} tip ${mirror_tip}."
+		# Explicit refspec keeps the fetch narrow and deterministic.
 		(
-			cd "${repo_path}"
-			git remote set-url origin "file://${lmirror}"
-			# Explicit refspec keeps the fetch narrow and deterministic.
-			git fetch origin "+refs/heads/${follow_branch}:refs/remotes/origin/${follow_branch}"
-			git reset --hard "origin/${follow_branch}"
+			cd "${repo_path}" &&
+			git remote set-url origin "file://${lmirror}" &&
+			git fetch origin "+refs/heads/${follow_branch}:refs/remotes/origin/${follow_branch}" &&
+			git reset --hard "origin/${follow_branch}" &&
 			git clean -ffdx
-		)
+		) || return 1
 	else
 		echo "${repo_path} missing or not a git repo. Recreating."
 		rm -rf "${repo_path}"
 		git clone --single-branch -b "${follow_branch}" \
-			--reference "${lmirror}" "file://${lmirror}" "${repo_path}"
+			--reference "${lmirror}" "file://${lmirror}" "${repo_path}" || return 1
 	fi
 }
 
@@ -408,7 +407,7 @@ function run_hooks() {
 	local hookdir="$1"
 	shift
 	local args="${@}"
-	[ -d "${hookdir}" ] || return
+	[ -d "${hookdir}" ] || return 0
 	for SCRIPT in `ls "${hookdir}"`; do
 		if [ -x ${hookdir}/${SCRIPT} ]; then
 			set +e
