@@ -316,8 +316,8 @@ function ensure_submodule_pinned() {
 	local submod_head submod_dirty
 
 	if [ -e "${repo_path}/.git" ] && [ -n "${pin}" ]; then
-		submod_head="$( cd "${repo_path}" && git rev-parse HEAD )"
-		submod_dirty="$( cd "${repo_path}" && git status --porcelain )"
+		submod_head="$( git -C "${repo_path}" rev-parse HEAD )"
+		submod_dirty="$( git -C "${repo_path}" status --porcelain )"
 		if [[ "${submod_head}" = "${pin}" ]] && [[ -z "${submod_dirty}" ]]; then
 			echo "Submodule ${repo_path} already at ${pin} and clean."
 			return 0
@@ -330,7 +330,7 @@ function ensure_submodule_pinned() {
 	# protocol.file.allow defaults to `user`, which blocks file:// for submodules.
 	git -c protocol.file.allow=always submodule update \
 		--reference "${lmirror}" --force -- "${repo_path}" || return 1
-	( cd "${repo_path}" && git clean -ffdx ) || return 1
+	git -C "${repo_path}" clean -ffdx || return 1
 }
 
 # Converges a branch-tracking submodule to the mirror's branch tip, ignoring the gitlink.
@@ -344,21 +344,19 @@ function ensure_submodule_tracking() {
 	mirror_tip="$( GIT_DIR="${lmirror}" git rev-parse "refs/heads/${follow_branch}" )" || return 1
 
 	if [ -e "${repo_path}/.git" ]; then
-		submod_head="$( cd "${repo_path}" && git rev-parse HEAD )"
-		submod_dirty="$( cd "${repo_path}" && git status --porcelain )"
+		submod_head="$( git -C "${repo_path}" rev-parse HEAD )"
+		submod_dirty="$( git -C "${repo_path}" status --porcelain )"
 		if [[ "${submod_head}" = "${mirror_tip}" ]] && [[ -z "${submod_dirty}" ]]; then
 			echo "${repo_path} already at ${follow_branch} tip ${submod_head} and clean."
 			return 0
 		fi
 		echo "Resetting ${repo_path} to ${follow_branch} tip ${mirror_tip}."
+		git -C "${repo_path}" remote set-url origin "file://${lmirror}" || return 1
 		# Explicit refspec keeps the fetch narrow and deterministic.
-		(
-			cd "${repo_path}" &&
-			git remote set-url origin "file://${lmirror}" &&
-			git fetch origin "+refs/heads/${follow_branch}:refs/remotes/origin/${follow_branch}" &&
-			git reset --hard "origin/${follow_branch}" &&
-			git clean -ffdx
-		) || return 1
+		git -C "${repo_path}" fetch origin \
+			"+refs/heads/${follow_branch}:refs/remotes/origin/${follow_branch}" || return 1
+		git -C "${repo_path}" reset --hard "origin/${follow_branch}" || return 1
+		git -C "${repo_path}" clean -ffdx || return 1
 	else
 		echo "${repo_path} missing or not a git repo. Recreating."
 		rm -rf "${repo_path}"
