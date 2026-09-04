@@ -279,7 +279,7 @@ function do_submodules() {
 		echo "${FONT_GREEN}Checking submodule ${FONT_NORMAL}${FONT_GREEN_BOLD}${repo_path}${FONT_NORMAL}"
 
 		url="$( git config -f .gitmodules --get "submodule.${name}.url" )"
-		pin="$( git rev-parse "HEAD:${repo_path}" 2>/dev/null || true )"
+		pin="$( git rev-parse --verify --quiet "HEAD:${repo_path}" || true )"
 		if ! lmirror="$( git_mirror "${url}" )"; then
 			return 1
 		fi
@@ -316,7 +316,7 @@ function ensure_submodule_pinned() {
 	local submod_head submod_dirty
 
 	if [ -e "${repo_path}/.git" ] && [ -n "${pin}" ]; then
-		submod_head="$( git -C "${repo_path}" rev-parse HEAD )"
+		submod_head="$( git -C "${repo_path}" rev-parse --verify HEAD )"
 		submod_dirty="$( git -C "${repo_path}" status --porcelain )"
 		if [[ "${submod_head}" = "${pin}" ]] && [[ -z "${submod_dirty}" ]]; then
 			echo "Submodule ${repo_path} already at ${pin} and clean."
@@ -341,10 +341,10 @@ function ensure_submodule_tracking() {
 	local mirror_tip submod_head submod_dirty
 
 	echo "${FONT_RED}Module '${repo_path}' tracks branch '${follow_branch}'${FONT_NORMAL}"
-	mirror_tip="$( GIT_DIR="${lmirror}" git rev-parse "refs/heads/${follow_branch}" )" || return 1
+	mirror_tip="$( GIT_DIR="${lmirror}" git rev-parse --verify "refs/heads/${follow_branch}" )" || return 1
 
 	if [ -e "${repo_path}/.git" ]; then
-		submod_head="$( git -C "${repo_path}" rev-parse HEAD )"
+		submod_head="$( git -C "${repo_path}" rev-parse --verify HEAD )"
 		submod_dirty="$( git -C "${repo_path}" status --porcelain )"
 		if [[ "${submod_head}" = "${mirror_tip}" ]] && [[ -z "${submod_dirty}" ]]; then
 			echo "${repo_path} already at ${follow_branch} tip ${submod_head} and clean."
@@ -404,8 +404,11 @@ function do_submodules_for_branch() {
 	# authoritative target. Compare against env HEAD before fetching; if
 	# they match and the working tree is fully clean (tracked modifications
 	# *and* untracked files), skip the parent reset.
-	mirror_tip="$( GIT_DIR="${MASTER_GIT_DIR}" git rev-parse "refs/heads/${branch}" )"
-	env_head="$( git rev-parse HEAD )"
+	if ! mirror_tip="$( GIT_DIR="${MASTER_GIT_DIR}" git rev-parse --verify "refs/heads/${branch}" )"; then
+		echo "${FONT_RED}Branch ${branch} is gone from the mirror${FONT_NORMAL}"
+		return 1
+	fi
+	env_head="$( git rev-parse --verify HEAD )"
 	env_dirty="$( git status --porcelain )"
 	if [[ "${env_head}" = "${mirror_tip}" ]] && [[ "${new_branch}" == 'false' ]] && [[ -z "${env_dirty}" ]]
 	then
