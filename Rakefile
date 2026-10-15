@@ -1,38 +1,39 @@
-# frozen_string_literal: true
+# Managed by modulesync - DO NOT EDIT
+# https://voxpupuli.org/docs/updating-files-managed-with-modulesync/
 
-require 'puppetlabs_spec_helper/rake_tasks'
-require 'puppet-syntax/tasks/puppet-syntax'
-require 'puppet-lint/tasks/puppet-lint'
-require 'rubocop/rake_task'
-require 'puppet-strings/tasks/generate'
+# Used in .fixtures (replace old `#{source_dir}` with `${source_dir}`)
+ENV['source_dir'] = __dir__
 
-Rake::Task['rubocop'].clear
-RuboCop::RakeTask.new(:rubocop) do |task|
-  # Bug where rubocop searches paths recursivly. Ignoring this config.
-  task.options = ['--config', '.rubocop.yml']
+begin
+  require 'voxpupuli/test/rake'
+rescue LoadError
+  # only available if gem group test is installed
 end
 
-JENKINS_TASKS = %w[syntax lint rubocop spec metadata_lint].freeze
+begin
+  require 'voxpupuli/acceptance/rake'
+rescue LoadError
+  # only available if gem group acceptance is installed
+end
 
-namespace :jenkins do
-  task :all do
-    base = ENV['BUNDLE_GEMFILE'].nil? ? 'rake' : "#{ENV['BUNDLE_BIN_PATH']} exec rake"
-    failed_tasks = []
-    JENKINS_TASKS.each do |target|
-      # puts "Executing '#{base} #{target}'"
-      failed_tasks << target unless system("#{base} #{target}")
-    end
-    unless failed_tasks.empty?
-      warn "The following targets failed: #{failed_tasks.join(', ')}"
-      exit(1)
-    end
+begin
+  require 'voxpupuli/release/rake_tasks'
+rescue LoadError
+  # only available if gem group releases is installed
+else
+  GCGConfig.user = 'UGent-DICT'
+  GCGConfig.project = 'r11k'
+end
+
+desc "Run main 'test' task and report merged results to coveralls"
+task test_with_coveralls: [:test] do
+  if Dir.exist?(File.expand_path('../lib', __FILE__))
+    require 'coveralls/rake/task'
+    Coveralls::RakeTask.new
+    Rake::Task['coveralls:push'].invoke
+  else
+    puts 'Skipping reporting to coveralls.  Module has no lib dir'
   end
 end
 
-desc 'Run all jenkins tasks'
-task jenkins: ['jenkins:all']
-
-Rake::Task['default'].clear
-task default: %i[syntax lint rubocop validate]
-
-PuppetLint.configuration.ignore_paths = ['spec/**/*.pp', 'pkg/**/*.pp', 'vendor/**/*.pp']
+# vim: syntax=ruby

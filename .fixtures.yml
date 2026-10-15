@@ -1,7 +1,7 @@
 ---
 fixtures:
   symlinks:
-    r11k: '#{source_dir}'
+    r11k: '${source_dir}'
   repositories:
     stdlib: 'https://github.com/puppetlabs/puppetlabs-stdlib.git'
     cron: 'https://github.com/puppetlabs/puppetlabs-cron_core.git'
