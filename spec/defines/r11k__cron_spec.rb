@@ -71,34 +71,46 @@ describe 'r11k::cron' do
     let(:default_params) { { 'git_base_repo' => '/local' } }
 
     {
-      '--basedir /etc/puppetlabs/code/environments --no-wait --hooksdir /etc/r11k/hooks.d' => {
+      '--basedir /etc/puppetlabs/code/environments --no-wait --hooksdir /etc/r11k/hooks.d --envhooksdir /etc/r11k/env.hooks.d --production_branch production' => {
         # use all defaults.
       },
-      '--basedir /environments --no-wait --hooksdir /etc/r11k/hooks.d' => {
+      '--basedir /environments --no-wait --hooksdir /etc/r11k/hooks.d --envhooksdir /etc/r11k/env.hooks.d --production_branch production' => {
         'basedir' => '/environments',
       },
-      '--basedir /environments --no-wait --cachedir /tmp/cache --hooksdir /etc/r11k/hooks.d' => {
+      '--basedir /environments --no-wait --cachedir /tmp/cache --hooksdir /etc/r11k/hooks.d --envhooksdir /etc/r11k/env.hooks.d --production_branch production' => {
         'basedir' => '/environments',
         'cachedir' => '/tmp/cache',
       },
-      '--basedir /environments --no-wait --cachedir /tmp/cache --hooksdir /etc/hooksdir' => {
+      '--basedir /environments --no-wait --cachedir /tmp/cache --hooksdir /etc/hooksdir --envhooksdir /etc/r11k/env.hooks.d --production_branch production' => {
         'basedir' => '/environments',
         'cachedir' => '/tmp/cache',
         'hooksdir' => '/etc/hooksdir',
       },
-      '--basedir /environments --no-wait --hooksdir /etc/hooksdir' => {
+      '--basedir /environments --no-wait --hooksdir /etc/hooksdir --envhooksdir /etc/r11k/env.hooks.d --production_branch production' => {
         'basedir' => '/environments',
         'hooksdir' => '/etc/hooksdir',
       },
-      '--basedir /environments --no-wait --hooksdir /etc/r11k/hooks.d --include production' => {
+      '--basedir /environments --no-wait --hooksdir /etc/r11k/hooks.d --envhooksdir /etc/envhooksdir --production_branch production' => {
+        'basedir' => '/environments',
+        'envhooksdir' => '/etc/envhooksdir',
+      },
+      '--basedir /environments --no-wait --hooksdir /etc/r11k/hooks.d --envhooksdir /etc/r11k/env.hooks.d --production_branch main' => {
+        'basedir' => '/environments',
+        'production_branch' => 'main',
+      },
+      '--basedir /environments --no-wait --hooksdir /etc/r11k/hooks.d --envhooksdir /etc/r11k/env.hooks.d --production_branch production --flush_cache_cmd /usr/local/bin/flush' => {
+        'basedir' => '/environments',
+        'flush_cache_cmd' => '/usr/local/bin/flush',
+      },
+      '--basedir /environments --no-wait --hooksdir /etc/r11k/hooks.d --envhooksdir /etc/r11k/env.hooks.d --production_branch production --include production' => {
         'basedir' => '/environments',
         'includes' => 'production',
       },
-      '--basedir /environments --no-wait --hooksdir /etc/r11k/hooks.d --include production:puppet/.\\*' => {
+      '--basedir /environments --no-wait --hooksdir /etc/r11k/hooks.d --envhooksdir /etc/r11k/env.hooks.d --production_branch production --include production:puppet/.\\*' => {
         'basedir' => '/environments',
         'includes' => ['production', 'puppet/.*'],
       },
-      '--basedir /path\\ with/spaces/ --no-wait --hooksdir /etc/r11k/hooks.d' => {
+      '--basedir /path\\ with/spaces/ --no-wait --hooksdir /etc/r11k/hooks.d --envhooksdir /etc/r11k/env.hooks.d --production_branch production' => {
         'basedir' => '/path with/spaces/',
       },
     }.each do |cmd, params|
@@ -124,6 +136,7 @@ describe 'r11k::cron' do
         is_expected.to contain_cron('r11k::cron: default').with_command(
           ['/usr/local/bin/wrapper',
            '/usr/local/bin/r11k --basedir /etc/puppetlabs/code/environments --no-wait --hooksdir /etc/r11k/hooks.d',
+           '--envhooksdir /etc/r11k/env.hooks.d --production_branch production',
            '--include production:puppet/.\\*',
            '/local',
            '2>&1'].join(' '),
