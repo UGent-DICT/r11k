@@ -270,6 +270,28 @@ function list_submodule_names() {
 		| sed 's/^submodule\.//;s/\.path$//'
 }
 
+# Points a checkout at the given mirror (origin url and object alternate).
+# Mirrors are keyed by remote url, so when a url changes the checkout keeps
+# borrowing from, and fetching from, the mirror of the old url.
+# Returns 0 when the checkout was already pointing at the mirror.
+function repoint_to_mirror() {
+	local dir="$1"
+	local lmirror="$2"
+	local alternates
+	if [ "$( git -C "${dir}" remote get-url origin 2>/dev/null )" = "file://${lmirror}" ]; then
+		return 0
+	fi
+	echo "Remote of ${dir} changed, pointing it at ${lmirror}."
+	git -C "${dir}" remote set-url origin "file://${lmirror}" || return 1
+	alternates="$( git -C "${dir}" rev-parse --path-format=absolute --git-path objects/info/alternates )" || return 1
+	echo "${lmirror}/objects" > "${alternates}" || return 1
+	# The remote-tracking refs may name objects only the old mirror had;
+	# the fetch that follows recreates them from the new mirror.
+	git -C "${dir}" for-each-ref --format='delete %(refname)' refs/remotes/origin \
+		| git -C "${dir}" update-ref --no-deref --stdin || return 1
+	return 1
+}
+
 function do_submodules() {
 	# A submodule's name keys the config sections, its path locates the
 	# gitlink; `git mv` moves the path and leaves the name alone.
@@ -315,7 +337,7 @@ function ensure_submodule_pinned() {
 	local lmirror="$4"
 	local submod_head submod_dirty
 
-	if [ -e "${repo_path}/.git" ] && [ -n "${pin}" ]; then
+	if [ -e "${repo_path}/.git" ] && [ -n "${pin}" ] && repoint_to_mirror "${repo_path}" "${lmirror}"; then
 		submod_head="$( git -C "${repo_path}" rev-parse --verify HEAD )"
 		submod_dirty="$( git -C "${repo_path}" status --porcelain )"
 		if [[ "${submod_head}" = "${pin}" ]] && [[ -z "${submod_dirty}" ]]; then
@@ -346,7 +368,8 @@ function ensure_submodule_tracking() {
 	if [ -e "${repo_path}/.git" ]; then
 		submod_head="$( git -C "${repo_path}" rev-parse --verify HEAD )"
 		submod_dirty="$( git -C "${repo_path}" status --porcelain )"
-		if [[ "${submod_head}" = "${mirror_tip}" ]] && [[ -z "${submod_dirty}" ]]; then
+		if repoint_to_mirror "${repo_path}" "${lmirror}" \
+			&& [[ "${submod_head}" = "${mirror_tip}" ]] && [[ -z "${submod_dirty}" ]]; then
 			echo "${repo_path} already at ${follow_branch} tip ${submod_head} and clean."
 			return 0
 		fi
@@ -410,7 +433,7 @@ function do_submodules_for_branch() {
 	fi
 	env_head="$( git rev-parse --verify HEAD )"
 	env_dirty="$( git status --porcelain )"
-	if [[ "${env_head}" = "${mirror_tip}" ]] && [[ "${new_branch}" == 'false' ]] && [[ -z "${env_dirty}" ]]
+	if repoint_to_mirror "." "${MASTER_GIT_DIR}" && [[ "${env_head}" = "${mirror_tip}" ]] && [[ "${new_branch}" == 'false' ]] && [[ -z "${env_dirty}" ]]
 	then
 		echo "${FONT_GREEN}Branch has no changes. ${FONT_NORMAL}${FONT_GREEN_BOLD}${branch}${FONT_NORMAL}"
 	else
